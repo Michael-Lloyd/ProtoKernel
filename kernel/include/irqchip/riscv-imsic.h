@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <irq/irq_domain.h>
+#include <stdbool.h>
 
 /* IMSIC layout and register definitions */
 #define IMSIC_MMIO_STRIDE            0x1000      /* Bytes between per-hart files */
@@ -39,5 +40,18 @@ struct imsic_data {
     struct irq_domain *domain;    /* Interrupt domain placeholder */
     struct irq_domain *msi_domain;/* MSI domain placeholder */
 };
+
+/* Low-level register access */
+void imsic_write_reg(struct imsic_file *file, uint32_t reg, uint32_t val);
+uint32_t imsic_read_reg(struct imsic_file *file, uint32_t reg);
+
+/* Interrupt manipulation */
+void imsic_set_pending(struct imsic_file *file, uint32_t id);
+void imsic_clear_pending(struct imsic_file *file, uint32_t id);
+void imsic_set_enabled(struct imsic_file *file, uint32_t id, bool enabled);
+void imsic_set_threshold(struct imsic_file *file, uint32_t threshold);
+
+/* Top-level interrupt handler */
+void imsic_handle_irq(void);
 
 #endif /* _IRQCHIP_RISCV_IMSIC_H */

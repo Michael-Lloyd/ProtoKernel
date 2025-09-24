@@ -11,6 +11,7 @@
 #include <irqchip/riscv-intc.h>
 #include <irqchip/riscv-plic.h>
 #include <irqchip/riscv-aplic.h>
+#include <irqchip/riscv-imsic.h>
 #include <irq/irq.h>
 #include <irq/irq_domain.h>
 #include <uart.h>
@@ -169,7 +170,11 @@ void intc_handle_irq(uint64_t cause) {
     case IRQ_S_EXT:
         // External interrupt - delegate to APLIC if available, otherwise PLIC
         if (aplic_primary) {
-            aplic_direct_handle_irq();
+            if (aplic_primary->msi_mode) {
+                imsic_handle_irq();
+            } else {
+                aplic_direct_handle_irq();
+            }
         } else if (plic_primary) {
             plic_handle_irq();
         }

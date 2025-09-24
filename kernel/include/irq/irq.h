@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <irq/irq_domain.h>
+#include <device/device.h>
 
 // Request interrupt (virq MUST come from domain mapping)
 int request_irq(uint32_t irq, irq_handler_t handler,
