@@ -217,9 +217,8 @@ int aplic_init(struct aplic_data *aplic) {
     
     // Initialize mode-specific functionality
     if (aplic->msi_mode) {
-        uart_puts("APLIC: MSI mode not yet implemented\n");
-        // TODO: Call aplic_msi_init(aplic) when implemented
-        return -1;
+        uart_puts("APLIC: Initializing MSI mode\n");
+        return aplic_msi_init(aplic);
     } else {
         uart_puts("APLIC: Initializing direct mode\n");
         return aplic_direct_init(aplic);
@@ -280,11 +279,8 @@ static int aplic_attach(struct device *dev) {
     
     // Check for MSI mode capability (msi-parent property)
     if (device_get_property_bool(dev, "msi-parent")) {
-        uart_puts("APLIC: MSI-capable hardware detected\n");
-        // For now, force direct mode even on MSI-capable hardware
-        // TODO: Add MSI mode support later
-        aplic->msi_mode = false;
-        uart_puts("APLIC: Configuring for direct mode (MSI not yet implemented)\n");
+        uart_puts("APLIC: MSI-capable hardware detected, enabling MSI mode\n");
+        aplic->msi_mode = true;
     } else {
         aplic->msi_mode = false;
         uart_puts("APLIC: Direct mode only hardware\n");
