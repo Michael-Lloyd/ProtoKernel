@@ -55,4 +55,7 @@ void test_msi_descriptors(void);
 // MSI SPI allocation tests
 int test_msi_spi_allocation(void);
 
+// MSI vector allocation tests
+void test_msi_allocation_runner(void);
+
 #endif /* _IRQ_TESTS_H */

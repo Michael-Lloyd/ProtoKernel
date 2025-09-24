@@ -78,6 +78,10 @@ void run_all_irq_tests(void) {
     test_msi_spi_allocation();
 #endif
     */
+
+    // MSI allocation tests
+    uart_puts("\n>>> Testing MSI Vector Allocation...\n");
+    test_msi_allocation_runner();
     
     uart_puts("\n");
     uart_puts("================================================================\n");

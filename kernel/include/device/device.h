@@ -77,6 +77,7 @@ struct device {
     
     // MSI support
     struct msi_device_data *msi_data;               // MSI descriptor data
+    struct irq_domain      *msi_domain;             // MSI IRQ domain
 };
 
 // Device flags

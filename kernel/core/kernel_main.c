@@ -193,7 +193,7 @@ void kernel_main(void* dtb) {
     // page_alloc_stress_tests();  
     
     // Run all IRQ subsystem tests
-    // run_all_irq_tests();
+    run_all_irq_tests();
 
     uart_puts("\nKernel initialization complete!\n");
     uart_puts("System halted.\n");

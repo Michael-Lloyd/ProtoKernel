@@ -89,10 +89,6 @@ int msi_desc_list_add_locked(struct msi_device_data *msi_data, struct msi_desc *
         return -1;
     }
     
-    if (msi_data->num_vectors >= msi_data->max_vectors) {
-        return -1;
-    }
-    
     // Add to tail of list
     desc->list.next = &msi_data->list;
     desc->list.prev = msi_data->list.prev;
@@ -108,7 +104,6 @@ int msi_desc_list_add_locked(struct msi_device_data *msi_data, struct msi_desc *
 // Initialize MSI support for a device
 int msi_device_init(struct device *dev) {
     struct msi_device_data *msi_data;
-    size_t bitmap_size;
     
     if (!dev) {
         return -1;
@@ -124,15 +119,6 @@ int msi_device_init(struct device *dev) {
     msi_data->list.prev = &msi_data->list;
     
     spin_lock_init(&msi_data->lock);
-    msi_data->max_vectors = MSI_MAX_VECTORS;
-    
-    // Allocate bitmap for vector tracking
-    bitmap_size = (msi_data->max_vectors + 7) / 8;
-    msi_data->used_vectors = kmalloc(bitmap_size, KM_ZERO);
-    if (!msi_data->used_vectors) {
-        kfree(msi_data);
-        return -1;
-    }
     
     dev->msi_data = msi_data;
     
@@ -172,159 +158,92 @@ void msi_device_cleanup(struct device *dev) {
     
     spin_unlock_irqrestore(&msi_data->lock, flags);
     
-    kfree(msi_data->used_vectors);
     kfree(msi_data);
     dev->msi_data = NULL;
 }
 
-// Helper to allocate vector indices within device
-// NOTE: This is for device-local tracking only. The actual hwirq allocation
-// will use tree domains via irq_domain_alloc_hwirq_range()
-static int msi_allocate_vector_indices(struct device *dev, uint32_t nvec) {
-    struct msi_device_data *msi_data = dev->msi_data;
-    uint32_t i, start = 0;
-    uint32_t consecutive = 0;
-    
-    // Find consecutive free vectors in device's local tracking
-    for (i = 0; i < msi_data->max_vectors; i++) {
-        if (!(msi_data->used_vectors[i / 8] & (1 << (i % 8)))) {
-            if (consecutive == 0) {
-                start = i;
-            }
-            consecutive++;
-            
-            if (consecutive == nvec) {
-                // Mark vectors as used
-                for (uint32_t j = start; j < start + nvec; j++) {
-                    msi_data->used_vectors[j / 8] |= (1 << (j % 8));
-                }
-                return start;
-            }
-        } else {
-            consecutive = 0;
-        }
-    }
-    
-    return -1;
-}
-
-// Helper to free vector indices within device
-static void msi_free_vector_indices(struct device *dev, uint32_t start, uint32_t nvec) {
-    struct msi_device_data *msi_data = dev->msi_data;
-    uint32_t i;
-    
-    for (i = start; i < start + nvec; i++) {
-        msi_data->used_vectors[i / 8] &= ~(1 << (i % 8));
-    }
-}
-
 // Allocate MSI vectors for a device
-// This function will need to be updated to:
-// 1. Get the MSI domain (tree domain) from the device or parent
-// 2. Use irq_domain_alloc_hwirq_range() to allocate consecutive hwirqs
-// 3. Create virq mappings using irq_create_mapping()
 int msi_alloc_vectors(struct device *dev, uint32_t min_vecs,
                      uint32_t max_vecs, unsigned int flags) {
     struct msi_device_data *msi_data;
     struct msi_desc *desc;
-    uint32_t nvec, allocated_base;
-    uint32_t i, j;
-    int ret;
+    uint32_t nvec, hwirq_base;
+    uint32_t i;
     unsigned long irqflags;
-    
-    if (!dev || !dev->msi_data || min_vecs == 0 || min_vecs > max_vecs ||
-        max_vecs > MSI_MAX_VECTORS) {
+
+    if (!dev || !dev->msi_data || !dev->msi_domain || min_vecs == 0 ||
+        min_vecs > max_vecs || max_vecs > MSI_MAX_VECTORS) {
         return -1;
     }
-    
+
     msi_data = dev->msi_data;
-    
-    // Determine number of vectors to allocate
-    nvec = max_vecs;
-    if (flags & MSI_FLAG_USE_DEF_NUM_VECS) {
-        nvec = min_vecs;
+
+    // Calculate the number of vectors to allocate.
+    // Find the largest power of two such that min_vecs <= nvec <= max_vecs.
+    nvec = 1;
+    while (nvec <= max_vecs) {
+        nvec <<= 1;
     }
-    
-    if (!(flags & MSI_FLAG_MULTI_VECTOR)) {
-        nvec = 1;
+    nvec >>= 1;
+
+    if (nvec < min_vecs) {
+        return -1;
     }
-    
+
     spin_lock_irqsave(&msi_data->lock, irqflags);
-    
-    // Allocate vector indices for device-local tracking
-    allocated_base = msi_allocate_vector_indices(dev, nvec);
-    if (allocated_base < 0) {
+
+    if (irq_domain_alloc_hwirq_range(dev->msi_domain, nvec, &hwirq_base) < 0) {
         spin_unlock_irqrestore(&msi_data->lock, irqflags);
         return -1;
     }
-    
-    // TODO: When MSI domain is available:
-    // 1. Get MSI domain from device or parent
-    //    struct irq_domain *msi_domain = dev->msi_domain;
-    // 2. Allocate hwirq range from tree domain
-    //    uint32_t hwirq_base;
-    //    if (irq_domain_alloc_hwirq_range(msi_domain, nvec, &hwirq_base) < 0) {
-    //        // Handle allocation failure
-    //    }
-    // 3. Create virq mappings
-    //    for (i = 0; i < nvec; i++) {
-    //        desc->irq = irq_create_mapping(msi_domain, hwirq_base + i);
-    //    }
-    
-    // Create descriptors for each vector
+
     for (i = 0; i < nvec; i++) {
         desc = msi_desc_alloc_internal();
         if (!desc) {
-            // Cleanup on failure
-            for (j = 0; j < i; j++) {
-                struct msi_desc *d = (struct msi_desc *)msi_data->list.next;
-                while (&d->list != &msi_data->list) {
-                    if (d->hwirq == allocated_base + j) {
-                        d->list.next->prev = d->list.prev;
-                        d->list.prev->next = d->list.next;
-                        kfree(d);
-                        break;
-                    }
-                    d = (struct msi_desc *)d->list.next;
-                }
-            }
-            
-            msi_free_vector_indices(dev, allocated_base, nvec);
-            spin_unlock_irqrestore(&msi_data->lock, irqflags);
-            return -1;
+            goto cleanup;
         }
-        
+
         desc->dev = dev;
-        desc->hwirq = allocated_base + i;
+        desc->hwirq = hwirq_base + i;
         desc->msi_attrib = flags & 0xFFFF;
-        
-        ret = msi_desc_list_add_locked(msi_data, desc);
-        if (ret < 0) {
+        desc->irq = irq_create_mapping(dev->msi_domain, desc->hwirq);
+        if (!desc->irq) {
             kfree(desc);
-            
-            // Cleanup on failure
-            for (j = 0; j < i; j++) {
-                struct msi_desc *d = (struct msi_desc *)msi_data->list.next;
-                while (&d->list != &msi_data->list) {
-                    if (d->hwirq == allocated_base + j) {
-                        d->list.next->prev = d->list.prev;
-                        d->list.prev->next = d->list.next;
-                        kfree(d);
-                        break;
-                    }
-                    d = (struct msi_desc *)d->list.next;
-                }
-            }
-            
-            msi_free_vector_indices(dev, allocated_base, nvec);
-            spin_unlock_irqrestore(&msi_data->lock, irqflags);
-            return -1;
+            goto cleanup;
+        }
+
+        if (msi_desc_list_add_locked(msi_data, desc) < 0) {
+            irq_dispose_mapping(desc->irq);
+            kfree(desc);
+            goto cleanup;
         }
     }
-    
+
     spin_unlock_irqrestore(&msi_data->lock, irqflags);
-    
     return nvec;
+
+cleanup:
+    // Free already allocated descriptors and mappings
+    while (i > 0) {
+        i--;
+        // This is inefficient, but required for cleanup.
+        // A better approach would be to have a way to find a descriptor by hwirq.
+        struct msi_desc *d = (struct msi_desc *)msi_data->list.next;
+        while (&d->list != &msi_data->list) {
+            if (d->hwirq == hwirq_base + i) {
+                irq_dispose_mapping(d->irq);
+                d->list.next->prev = d->list.prev;
+                d->list.prev->next = d->list.next;
+                msi_data->num_vectors--;
+                kfree(d);
+                break;
+            }
+            d = (struct msi_desc *)d->list.next;
+        }
+    }
+    irq_domain_free_hwirq_range(dev->msi_domain, hwirq_base, nvec);
+    spin_unlock_irqrestore(&msi_data->lock, irqflags);
+    return -1;
 }
 
 // Free all MSI vectors for a device
@@ -332,48 +251,34 @@ void msi_free_vectors(struct device *dev) {
     struct msi_device_data *msi_data;
     struct msi_desc *desc, *next;
     unsigned long flags;
-    
-    if (!dev || !dev->msi_data) {
+
+    if (!dev || !dev->msi_data || !dev->msi_domain) {
         return;
     }
-    
+
     msi_data = dev->msi_data;
-    
+
     spin_lock_irqsave(&msi_data->lock, flags);
-    
-    // TODO: When MSI domain is available:
-    // Track hwirq ranges to free from tree domain via irq_domain_free_hwirq_range()
-    
-    // Walk list and free descriptors
+
     desc = (struct msi_desc *)msi_data->list.next;
     while (&desc->list != &msi_data->list) {
         next = (struct msi_desc *)desc->list.next;
-        
-        // Dispose of IRQ mapping if exists
+
         if (desc->irq) {
             irq_dispose_mapping(desc->irq);
-            desc->irq = 0;
         }
-        
-        // Free device-local vector index
-        msi_free_vector_indices(dev, desc->hwirq, 1);
-        
-        // TODO: Free hwirq from tree domain
-        // irq_domain_free_hwirq_range(msi_domain, desc->hwirq, 1);
-        
-        // Remove from list
+        // TODO: This is inefficient. A better approach would be to find
+        // contiguous ranges and free them in batches.
+        irq_domain_free_hwirq_range(dev->msi_domain, desc->hwirq, 1);
+
         desc->list.next->prev = desc->list.prev;
         desc->list.prev->next = desc->list.next;
-        
         msi_data->num_vectors--;
-        desc->refcount--;
-        if (desc->refcount == 0) {
-            kfree(desc);
-        }
-        
+
+        kfree(desc);
         desc = next;
     }
-    
+
     spin_unlock_irqrestore(&msi_data->lock, flags);
 }
 

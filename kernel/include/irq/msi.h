@@ -101,10 +101,6 @@ struct msi_device_data {
     void *msi_cap;
     void *msix_cap;
     
-    // Allocation tracking
-    unsigned long *used_vectors;
-    uint32_t max_vectors;
-    
     spinlock_t lock;
 };
 
