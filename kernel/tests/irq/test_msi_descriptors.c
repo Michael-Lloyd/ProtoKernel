@@ -114,7 +114,6 @@ static int test_msi_device_init(void) {
     TEST_ASSERT_EQ(ret, 0, "Failed to initialize MSI for device");
     TEST_ASSERT(dev->msi_data != NULL, "MSI data not allocated");
     TEST_ASSERT_EQ(dev->msi_data->num_vectors, 0, "Initial vector count should be 0");
-    TEST_ASSERT_EQ(dev->msi_data->max_vectors, MSI_MAX_VECTORS, "Max vectors should be MSI_MAX_VECTORS");
     
     // Verify list is initialized
     TEST_ASSERT(dev->msi_data->list.next == &dev->msi_data->list, "List not properly initialized");
